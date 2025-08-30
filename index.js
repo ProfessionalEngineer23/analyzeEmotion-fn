@@ -1,8 +1,8 @@
 import fetch from "node-fetch";
 import { Client, Databases, ID } from "node-appwrite";
 
-const DB_ID = "app";
-const ANALYSIS_COL = "Analysis";
+const DB_ID = process.env.DB_ID || "app";
+const ANALYSIS_COL = process.env.ANALYSIS_COL || "Analysis";
 
 export default async ({ req, res, log, error }) => {
   try {
