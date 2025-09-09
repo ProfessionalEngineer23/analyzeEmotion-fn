@@ -1,56 +1,93 @@
-import fetch from "node-fetch";
-import { Client, Databases, ID } from "node-appwrite";
+const { Client, Databases, ID } = require('node-appwrite');
+const NaturalLanguageUnderstandingV1 = require('ibm-watson/natural-language-understanding/v1');
+const { IamAuthenticator } = require('ibm-watson/auth');
 
-const DB_ID = process.env.DB_ID || "app";
-const ANALYSIS_COL = process.env.ANALYSIS_COL || "Analysis";
+// Initialize Appwrite client
+const client = new Client();
+client
+  .setEndpoint(process.env.APPWRITE_ENDPOINT)
+  .setProject(process.env.APPWRITE_PROJECT_ID)
+  .setKey(process.env.APPWRITE_API_KEY);
 
-export default async ({ req, res, log, error }) => {
+const databases = new Databases(client);
+
+// Initialize Watson NLU
+const naturalLanguageUnderstanding = new NaturalLanguageUnderstandingV1({
+  version: '2022-04-07',
+  authenticator: new IamAuthenticator({
+    apikey: process.env.WATSON_API_KEY,
+  }),
+  serviceUrl: process.env.WATSON_URL,
+});
+
+module.exports = async ({ req, res, log, error }) => {
   try {
-    const {
-      ANALYZER = "watson-nlu",
-      WATSON_NLU_URL,
-      WATSON_NLU_APIKEY,
-      APPWRITE_ENDPOINT,
-      APPWRITE_PROJECT_ID,
-      APPWRITE_API_KEY
-    } = process.env;
+    // Parse the request body
+    const { responseId, questionId, text } = JSON.parse(req.body);
+    
+    if (!responseId || !text) {
+      return res.json({ 
+        success: false, 
+        error: 'Missing responseId or text' 
+      }, 400);
+    }
 
-    const { responseId, text } = JSON.parse(req.body || "{}");
-    if (!responseId || !text) return res.json({ error: "Missing responseId or text" }, 400);
+    log(`Processing Watson NLU for response: ${responseId}, question: ${questionId || 'overall'}`);
 
-    const url = `${WATSON_NLU_URL}/v1/analyze?version=2022-04-07`;
-    const r = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type":"application/json",
-        "Authorization":"Basic " + Buffer.from("apikey:"+WATSON_NLU_APIKEY).toString("base64")
-      },
-      body: JSON.stringify({ text, features: { emotion: {} } })
+    // Call Watson NLU Emotion Analysis
+    const analyzeParams = {
+      text: text,
+      features: {
+        emotion: {
+          targets: ['joy', 'sadness', 'anger', 'fear', 'disgust']
+        },
+        sentiment: {}
+      }
+    };
+
+    const analysisResult = await naturalLanguageUnderstanding.analyze(analyzeParams);
+    
+    // Extract emotion scores
+    const emotions = analysisResult.result.emotion?.document?.emotion || {};
+    const sentiment = analysisResult.result.sentiment?.document;
+    
+    // Prepare analysis data
+    const analysisData = {
+      responseId: responseId,
+      questionId: questionId || null, // null for overall analysis
+      joy: emotions.joy || 0,
+      sadness: emotions.sadness || 0,
+      anger: emotions.anger || 0,
+      fear: emotions.fear || 0,
+      disgust: emotions.disgust || 0,
+      sentiment: sentiment?.score || 0,
+      sentiment_label: sentiment?.label || 'neutral',
+      model: 'watson-nlu-v1',
+      processedAt: new Date().toISOString()
+    };
+
+    // Save to analysis collection
+    const analysisDoc = await databases.createDocument(
+      process.env.APPWRITE_DATABASE_ID,
+      process.env.APPWRITE_ANALYSIS_COLLECTION_ID,
+      ID.unique(),
+      analysisData
+    );
+
+    log(`Analysis saved: ${analysisDoc.$id}`);
+
+    return res.json({ 
+      success: true, 
+      analysisId: analysisDoc.$id,
+      emotions: emotions,
+      sentiment: sentiment
     });
-    const data = await r.json();
-    const emotion = data?.emotion?.document?.emotion;
-    if (!emotion) return res.json({ error: "No emotion returned", details: data }, 502);
 
-    const client = new Client()
-      .setEndpoint(APPWRITE_ENDPOINT)
-      .setProject(APPWRITE_PROJECT_ID)
-      .setKey(APPWRITE_API_KEY);
-
-    const db = new Databases(client);
-    const doc = await db.createDocument(DB_ID, ANALYSIS_COL, ID.unique(), {
-      responseId,
-      joy: emotion.joy,
-      sadness: emotion.sadness,
-      anger: emotion.anger,
-      fear: emotion.fear,
-      disgust: emotion.disgust,
-      model: ANALYZER,
-      createdAt: new Date().toISOString()
-    });
-
-    return res.json({ ok: true, analysisId: doc.$id, emotion });
-  } catch (e) {
-    error(e);
-    return res.json({ error: String(e) }, 500);
+  } catch (err) {
+    error(`Watson NLU processing failed: ${err.message}`);
+    return res.json({ 
+      success: false, 
+      error: err.message 
+    }, 500);
   }
 };
