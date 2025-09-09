@@ -1,26 +1,9 @@
-const { Client, Databases, ID } = require('node-appwrite');
-const NaturalLanguageUnderstandingV1 = require('ibm-watson/natural-language-understanding/v1');
-const { IamAuthenticator } = require('ibm-watson/auth');
+// Updated analyzeEmotion function to match your GitHub repository format
+import { Client, Databases, ID } from "node-appwrite";
+import NaturalLanguageUnderstandingV1 from "ibm-watson/natural-language-understanding/v1.js";
+import { IamAuthenticator } from "ibm-watson/auth/index.js";
 
-// Initialize Appwrite client
-const client = new Client();
-client
-  .setEndpoint(process.env.APPWRITE_ENDPOINT)
-  .setProject(process.env.APPWRITE_PROJECT_ID)
-  .setKey(process.env.APPWRITE_API_KEY);
-
-const databases = new Databases(client);
-
-// Initialize Watson NLU
-const naturalLanguageUnderstanding = new NaturalLanguageUnderstandingV1({
-  version: '2022-04-07',
-  authenticator: new IamAuthenticator({
-    apikey: process.env.WATSON_API_KEY,
-  }),
-  serviceUrl: process.env.WATSON_URL,
-});
-
-module.exports = async ({ req, res, log, error }) => {
+export default async ({ req, res, log, error }) => {
   try {
     // Parse the request body
     const { responseId, questionId, text } = JSON.parse(req.body);
@@ -33,6 +16,15 @@ module.exports = async ({ req, res, log, error }) => {
     }
 
     log(`Processing Watson NLU for response: ${responseId}, question: ${questionId || 'overall'}`);
+
+    // Initialize Watson NLU
+    const naturalLanguageUnderstanding = new NaturalLanguageUnderstandingV1({
+      version: '2022-04-07',
+      authenticator: new IamAuthenticator({
+        apikey: process.env.WATSON_API_KEY,
+      }),
+      serviceUrl: process.env.WATSON_URL,
+    });
 
     // Call Watson NLU Emotion Analysis
     const analyzeParams = {
@@ -65,6 +57,15 @@ module.exports = async ({ req, res, log, error }) => {
       model: 'watson-nlu-v1',
       processedAt: new Date().toISOString()
     };
+
+    // Initialize Appwrite client
+    const client = new Client();
+    client
+      .setEndpoint(process.env.APPWRITE_ENDPOINT)
+      .setProject(process.env.APPWRITE_PROJECT_ID)
+      .setKey(process.env.APPWRITE_API_KEY);
+
+    const databases = new Databases(client);
 
     // Save to analysis collection
     const analysisDoc = await databases.createDocument(
