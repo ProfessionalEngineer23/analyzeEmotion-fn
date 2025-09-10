@@ -10,18 +10,12 @@ import { IamAuthenticator } from "ibm-watson/auth/index.js";
 
 function parseJson(body) {
   if (!body) return {};
-  try {
-    return JSON.parse(body);
-  } catch {
-    return {};
-  }
+  try { return JSON.parse(body); } catch { return {}; }
 }
 
 function requireEnv(name) {
   const v = process.env[name];
-  if (!v || String(v).trim() === "") {
-    throw new Error(`Missing environment variable: ${name}`);
-  }
+  if (!v || String(v).trim() === "") throw new Error(`Missing environment variable: ${name}`);
   return v;
 }
 
@@ -33,13 +27,10 @@ function truncate(str, max = 10000) {
 async function withRetry(fn, { attempts = 2, delayMs = 500 } = {}) {
   let lastErr;
   for (let i = 0; i < attempts; i++) {
-    try {
-      return await fn();
-    } catch (e) {
+    try { return await fn(); }
+    catch (e) {
       lastErr = e;
-      if (i < attempts - 1) {
-        await new Promise((r) => setTimeout(r, delayMs));
-      }
+      if (i < attempts - 1) await new Promise(r => setTimeout(r, delayMs));
     }
   }
   throw lastErr;
@@ -66,7 +57,7 @@ function getDB() {
     const client = new Client()
       .setEndpoint(requireEnv("APPWRITE_ENDPOINT")) // e.g. https://fra.cloud.appwrite.io/v1
       .setProject(requireEnv("APPWRITE_PROJECT_ID"))
-      .setKey(requireEnv("APPWRITE_API_KEY")); // API key with rows.read + rows.write
+      .setKey(requireEnv("APPWRITE_API_KEY"));     // rows.read + rows.write
     appwriteDB = new Databases(client);
   }
   return appwriteDB;
@@ -77,54 +68,70 @@ function getDB() {
 export default async ({ req, res, log, error }) => {
   try {
     // Validate env up front (throws if missing)
-    const DB_ID = requireEnv("APPWRITE_DATABASE_ID");
+    const DB_ID   = requireEnv("APPWRITE_DATABASE_ID");
     const ANALYSIS = requireEnv("APPWRITE_ANALYSIS_COLLECTION_ID");
+
+    // Optional envs
+    const WATSON_LANGUAGE = process.env.WATSON_LANGUAGE || "en";
+    const MIN_LEN = Number(process.env.WATSON_MINLEN || 8);
 
     // Parse request
     const { responseId, questionId = null, text } = parseJson(req.body);
 
     if (!responseId || typeof text !== "string" || text.trim() === "") {
       return res.json(
-        {
-          success: false,
-          error: "Missing or invalid payload. Expect { responseId, questionId?, text }",
-        },
+        { success: false, error: "Missing or invalid payload. Expect { responseId, questionId?, text }" },
         400
       );
     }
 
     const cleanText = truncate(text.trim(), 10000);
 
-    log(
-      JSON.stringify(
-        {
-          msg: "Watson NLU analyze start",
-          responseId,
-          questionId: questionId || null,
-          textLen: cleanText.length,
-        },
-        null,
-        2
-      )
-    );
+    log(JSON.stringify({
+      msg: "Watson NLU analyze start",
+      responseId,
+      questionId,
+      textLen: cleanText.length,
+      lang: WATSON_LANGUAGE
+    }));
 
-    // Watson call (emotion + sentiment). No 'targets' here; document-level emotion is correct.
+    const db = getDB();
+
+    // If text is too short, write a neutral row and exit gracefully
+    if (cleanText.length < MIN_LEN) {
+      const neutral = await db.createDocument(
+        DB_ID, ANALYSIS, ID.unique(),
+        {
+          responseId,
+          questionId,
+          joy: 0, sadness: 0, anger: 0, fear: 0, disgust: 0,
+          sentiment: 0,
+          sentiment_label: "neutral",
+          model: "watson-nlu-v1",
+          processedAt: new Date().toISOString(),
+          textLen: cleanText.length,
+          note: "too_short"
+        }
+      );
+      log(JSON.stringify({ msg: "Neutral analysis saved (too short)", analysisId: neutral.$id }));
+      return res.json({ success: true, analysisId: neutral.$id, skipped: "too_short" }, 200);
+    }
+
+    // Watson call (document-level emotion + sentiment)
     const nlu = getWatson();
     const analyzeParams = {
       text: cleanText,
+      language: WATSON_LANGUAGE,   // <-- fixes "not enough text for language id"
       features: {
-        emotion: {}, // document-level emotion
-        sentiment: {}, // document-level sentiment
+        emotion: {},
+        sentiment: {},
       },
     };
 
-    const analysisResult = await withRetry(() => nlu.analyze(analyzeParams), {
-      attempts: 2,
-      delayMs: 600,
-    });
+    const result = await withRetry(() => nlu.analyze(analyzeParams), { attempts: 2, delayMs: 600 });
 
-    const emotions = analysisResult?.result?.emotion?.document?.emotion || {};
-    const sentimentDoc = analysisResult?.result?.sentiment?.document || null;
+    const emotions = result?.result?.emotion?.document?.emotion || {};
+    const sentimentDoc = result?.result?.sentiment?.document || null;
 
     const analysisData = {
       responseId,
@@ -138,47 +145,23 @@ export default async ({ req, res, log, error }) => {
       sentiment_label: sentimentDoc?.label || "neutral",
       model: "watson-nlu-v1",
       processedAt: new Date().toISOString(),
+      textLen: cleanText.length,
+      lang: WATSON_LANGUAGE
     };
 
-    // Save document
-    const db = getDB();
     const saved = await db.createDocument(DB_ID, ANALYSIS, ID.unique(), analysisData);
 
-    log(
-      JSON.stringify(
-        {
-          msg: "Watson NLU saved",
-          analysisId: saved.$id,
-          responseId,
-          questionId,
-        },
-        null,
-        2
-      )
-    );
+    log(JSON.stringify({ msg: "Watson NLU saved", analysisId: saved.$id, responseId, questionId }));
 
-    return res.json(
-      {
-        success: true,
-        analysisId: saved.$id,
-        emotions: analysisData,
-      },
-      200
-    );
+    return res.json({ success: true, analysisId: saved.$id, emotions: emotions, sentiment: sentimentDoc }, 200);
+
   } catch (err) {
-    // Log full error safely
-    error(
-      JSON.stringify(
-        {
-          msg: "Watson NLU processing failed",
-          name: err?.name,
-          message: err?.message,
-          stack: err?.stack?.split("\n").slice(0, 3).join("\n"),
-        },
-        null,
-        2
-      )
-    );
+    error(JSON.stringify({
+      msg: "Watson NLU processing failed",
+      name: err?.name,
+      message: err?.message,
+      stack: err?.stack?.split("\n").slice(0, 3).join("\n"),
+    }));
     return res.json({ success: false, error: err?.message || "Internal error" }, 500);
   }
 };
