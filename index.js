@@ -133,21 +133,23 @@ export default async ({ req, res, log, error }) => {
     const emotions = result?.result?.emotion?.document?.emotion || {};
     const sentimentDoc = result?.result?.sentiment?.document || null;
 
-    const analysisData = {
-      responseId,
-      questionId, // null = overall
-      joy: Number(emotions.joy || 0),
-      sadness: Number(emotions.sadness || 0),
-      anger: Number(emotions.anger || 0),
-      fear: Number(emotions.fear || 0),
-      disgust: Number(emotions.disgust || 0),
-      sentiment: typeof sentimentDoc?.score === "number" ? sentimentDoc.score : 0,
-      sentiment_label: sentimentDoc?.label || "neutral",
-      model: "watson-nlu-v1",
-      processedAt: new Date().toISOString(),
-      textLen: cleanText.length,
-      lang: WATSON_LANGUAGE
-    };
+const analysisData = {
+  responseId,
+  questionId, // null = overall
+  joy: Number(emotions.joy || 0),
+  sadness: Number(emotions.sadness || 0),
+  anger: Number(emotions.anger || 0),
+  fear: Number(emotions.fear || 0),
+  disgust: Number(emotions.disgust || 0),
+  sentiment: typeof sentimentDoc?.score === "number" ? sentimentDoc.score : 0,
+  sentiment_label: sentimentDoc?.label || "neutral",
+  model: "watson-nlu-v1",
+  processedAt: new Date().toISOString(),
+  createdAt: new Date().toISOString(),      // <-- add this
+  textLen: cleanText.length,
+  lang: WATSON_LANGUAGE
+};
+
 
     const saved = await db.createDocument(DB_ID, ANALYSIS, ID.unique(), analysisData);
 
