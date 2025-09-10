@@ -132,10 +132,11 @@ export default async ({ req, res, log, error }) => {
 
     const emotions = result?.result?.emotion?.document?.emotion || {};
     const sentimentDoc = result?.result?.sentiment?.document || null;
-
+    
+const nowIso = new Date().toISOString();
 const analysisData = {
   responseId,
-  questionId, // null = overall
+  questionId,
   joy: Number(emotions.joy || 0),
   sadness: Number(emotions.sadness || 0),
   anger: Number(emotions.anger || 0),
@@ -144,10 +145,7 @@ const analysisData = {
   sentiment: typeof sentimentDoc?.score === "number" ? sentimentDoc.score : 0,
   sentiment_label: sentimentDoc?.label || "neutral",
   model: "watson-nlu-v1",
-  processedAt: new Date().toISOString(),
-  createdAt: new Date().toISOString(),      // <-- add this
-  textLen: cleanText.length,
-  lang: WATSON_LANGUAGE
+  processedAt: nowIso
 };
 
 
